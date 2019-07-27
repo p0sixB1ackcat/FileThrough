@@ -1,0 +1,16 @@
+
+
+386_OBJECTS=\
+ $(OBJ_PATH)\$O\fileechodrv.obj \
+
+
+
+
+
+# lowercased
+BASEDIR=d:\wdk7
+OBJECT_ROOT=d:\wdk7
+MAKEDIR_LOWERCASE=d:\code\fileechoapp\fileechodrv
+OBJ_PATH=d:\code\fileechoapp\fileechodrv
+CONCURRENT_MIDL=0
+CONCURRENT_MANIFEST_BUILD=0
