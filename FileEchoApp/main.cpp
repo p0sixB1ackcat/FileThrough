@@ -8,7 +8,7 @@
 #define DEFAULT_REQUEST_COUNT 5
 #define MAX_THREAD_COUNT 64
 
-#define RULE_PATH L"C:\\Users\\AT\\Desktop\\rule.txt"
+#define RULE_PATH L"C:\\Users\\p0sixB1ackcat\\Desktop\\rule.txt"
 
 #pragma comment(lib,"FltLib.lib")
 #pragma comment(lib,"Advapi32.lib")
@@ -499,11 +499,17 @@ UINT CommunicationThreadFunc(void *pContext)
 
 	} while (0);
 
-	WaitForMultipleObjectsEx(i,
-		hThreads,
-		TRUE,
-		INFINITE,
-		FALSE);
+    if (hThreads[0] 
+        && 
+        hThreads[1]
+        )
+    {
+        WaitForMultipleObjectsEx(i,
+            hThreads,
+            TRUE,
+            INFINITE,
+            FALSE);
+    }
 
 	if(Context.m_Port)
 		CloseHandle(Context.m_Port);
