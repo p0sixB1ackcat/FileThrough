@@ -10,7 +10,7 @@ Signature   = "$Windows NT$"
 Class = "ActivityMonitor"
 ClassGuid = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc3}
 Provider    = %ManufacturerName%
-DriverVer   = 
+DriverVer = 12/23/2020,20.40.16.871
 CatalogFile = FileEchoDrv.cat
 
 [DestinationDirs]
@@ -95,5 +95,5 @@ DiskId1                 = "FileEchoDrv Device Installation Disk"
 DefaultInstance         = "FileEchoDrv Instance"
 Instance1.Name          = "FileEchoDrv Instance"
 ; TODO - Change the altitude value, see https://msdn.microsoft.com/en-us/windows/hardware/drivers/ifs/load-order-groups-and-altitudes-for-minifilter-drivers
-Instance1.Altitude       = "_TODO_Change_Altitude_appropriately_"
+Instance1.Altitude       = "265000"
 Instance1.Flags         = 0x0              ; Allow all attachments

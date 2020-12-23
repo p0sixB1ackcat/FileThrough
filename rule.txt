@@ -1,0 +1,14 @@
+c:\abc--->c:\target
+c:\Windows\System32\drivers\1.txt--->c:\Windows\System32\drivers-echo\1.txt    
+C:\source\1.txt--->C:\echo-source\1.txt
+C:\Users\p0sixB1ackcat\Documents\1.txt--->C:\Users\p0sixB1ackcat\Desktop\1.txt
+
+
+
+
+
+
+
+
+
+

@@ -61,7 +61,6 @@ GLOBAL_CONTROL_DATA g_Global_Control_Data = {0x00};
 
 ULONG gTraceFlags = 0;
 
-
 #define PT_DBG_PRINT( _dbgLevel, _string )          \
     (FlagOn(gTraceFlags,(_dbgLevel)) ?              \
         DbgPrint _string :                          \
@@ -152,7 +151,7 @@ NTSTATUS FltNotifyMessage(PVOID PortCookie
 	, ULONG OutputBufferLength
 	, ULONG* ReturnOutputLength);
 
-NTSTATUS DispathIoControl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp);
+NTSTATUS DispatchIoControl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp);
 
 NTSTATUS DispatchWrite(PDEVICE_OBJECT pDeviceObject, PIRP pIrp);
 
@@ -251,94 +250,115 @@ DriverEntry (
     _In_ PUNICODE_STRING RegistryPath
     )
 {
-    NTSTATUS status;
-	OBJECT_ATTRIBUTES oa;
+	UNREFERENCED_PARAMETER(RegistryPath);
+
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
+	OBJECT_ATTRIBUTES stObjAttr;
 	UNICODE_STRING uPortName = {0x00};
 	PSECURITY_DESCRIPTOR sd;
 	UNICODE_STRING uDeviceName = {0x00};
 	UNICODE_STRING uSymbolicLinkName = {0x00};
 	ULONG i;
 
-	RtlInitUnicodeString(&uDeviceName, DEVICE_NAME);
-	status = IoCreateDevice(DriverObject, 0, &uDeviceName, FILE_DEVICE_UNKNOWN, 0, FALSE, &g_Global_Control_Data.m_DeviceObject);
-	if (!NT_SUCCESS(status))
+	DbgBreakPoint();
+
+	__try
 	{
-		KdPrint(("IoCreateDevice Fail:%d!\n", status));
-		return status;
-	}
-	
-	RtlInitUnicodeString(&uSymbolicLinkName, SYMBOLIC_LINK_NAME);
-	status = IoCreateSymbolicLink(&uSymbolicLinkName, &uDeviceName);
-	if (!NT_SUCCESS(status))
-	{
-		KdPrint(("IoCreateSymbolicLink Fail:%d\n", status));
-		IoDeleteDevice(g_Global_Control_Data.m_DeviceObject);
-		return status;
-	}
+		RtlInitUnicodeString(&uDeviceName, DEVICE_NAME);
+		Status = IoCreateDevice(DriverObject, 0, &uDeviceName, FILE_DEVICE_UNKNOWN, 0, FALSE, &g_Global_Control_Data.m_DeviceObject);
+		if (!NT_SUCCESS(Status))
+		{
+			KdPrint(("IoCreateDevice Fail:%d!\n", Status));
+			__leave;
+		}
 
-	for (i = 0; i < IRP_MJ_MAXIMUM_FUNCTION; ++i)
-	{
-		DriverObject->MajorFunction[i] = DispathIoControl;
-	}
+		RtlInitUnicodeString(&uSymbolicLinkName, SYMBOLIC_LINK_NAME);
+		Status = IoCreateSymbolicLink(&uSymbolicLinkName, &uDeviceName);
+		if (!NT_SUCCESS(Status))
+		{
+			KdPrint(("IoCreateSymbolicLink Fail:%d\n", Status));
+			__leave;
+		}
 
-	DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispathIoControl;
-	DriverObject->MajorFunction[IRP_MJ_WRITE] = DispatchWrite;
-	DriverObject->DriverUnload = DriverUnload;
-    UNREFERENCED_PARAMETER( RegistryPath );
-	
-    PT_DBG_PRINT( PTDBG_TRACE_ROUTINES,
-                  ("FileEchoDrv!DriverEntry: Entered\n") );
+		for (i = 0; i < IRP_MJ_MAXIMUM_FUNCTION; ++i)
+		{
+			DriverObject->MajorFunction[i] = DispatchIoControl;
+		}
 
-    //
-    //  Register with FltMgr to tell it our callback routines
-    //
-	
-    status = FltRegisterFilter( DriverObject,
-                                &FilterRegistration,
-                                &g_Global_Control_Data.m_pFilter);
-	
-    FLT_ASSERT( NT_SUCCESS( status ) );
+		DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispatchIoControl;
+		DriverObject->MajorFunction[IRP_MJ_WRITE] = DispatchWrite;
+		DriverObject->DriverUnload = DriverUnload;
+		
+		PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+			("FileEchoDrv!DriverEntry: Entered\n"));
 
-	g_Global_Control_Data.m_pDriverObject = DriverObject;
+		//
+		//  Register with FltMgr to tell it our callback routines
+		//
 
-	status = FltBuildDefaultSecurityDescriptor(&sd, FLT_PORT_ALL_ACCESS);
+		Status = FltRegisterFilter(DriverObject,
+			&FilterRegistration,
+			&g_Global_Control_Data.m_pFilter);
 
-	if (NT_SUCCESS(status))
-	{
+		FLT_ASSERT(NT_SUCCESS(Status));
+
+		g_Global_Control_Data.m_pDriverObject = DriverObject;
+
+		Status = FltBuildDefaultSecurityDescriptor(&sd, FLT_PORT_ALL_ACCESS);
+		if (!NT_SUCCESS(Status))
+		{
+			KdPrint(("FltBuildDefaultSecurityDescriptor fail : 0x%x. \n", Status));
+			__leave;
+		}
+
 		RtlInitUnicodeString(&uPortName, L"\\FileEchoPort");
-		InitializeObjectAttributes(&oa,
+		InitializeObjectAttributes(&stObjAttr,
 			&uPortName,
 			OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
 			NULL,
 			sd
 		);
 
-		status = FltCreateCommunicationPort(g_Global_Control_Data.m_pFilter,
-			&g_Global_Control_Data.m_ServerPort,
-			&oa,
-			NULL,
-			FltPortConnect,
-			FltPortDisconnect,
-			FltNotifyMessage,
-			1);
+		Status = FltCreateCommunicationPort(g_Global_Control_Data.m_pFilter, 
+			&g_Global_Control_Data.m_ServerPort, 
+			&stObjAttr,
+			NULL, 
+			FltPortConnect, 
+			FltPortDisconnect, 
+			FltNotifyMessage, 
+			1); 
 
 		FltFreeSecurityDescriptor(sd);
 
 		InitializeListHead(&g_Global_Control_Data.m_RuleList);
 
 		//ExInitializeResourceLite(&g_Global_Control_Data.m_RuleListLock);
-
-		if (NT_SUCCESS(status))
+		if (!NT_SUCCESS(Status))
 		{
-			status = FltStartFiltering(g_Global_Control_Data.m_pFilter);
-			if (!NT_SUCCESS(status))
+			KdPrint(("FltCreateCommunicationPort fail : 0x%x. \n"));
+			__leave;
+		}
+
+		Status = FltStartFiltering(g_Global_Control_Data.m_pFilter);
+		//FltUnregisterFilter(g_Global_Control_Data.m_pFilter);
+	}
+	
+	__finally
+	{
+		if (!NT_SUCCESS(Status))
+		{
+			if (g_Global_Control_Data.m_DeviceObject)
+			{
+				IoDeleteDevice(g_Global_Control_Data.m_DeviceObject);
+			}
+			if (g_Global_Control_Data.m_pFilter)
 			{
 				FltUnregisterFilter(g_Global_Control_Data.m_pFilter);
 			}
 		}
 	}
-	//FltUnregisterFilter(g_Global_Control_Data.m_pFilter);
-    return status;
+
+    return Status;
 }
 
 NTSTATUS
@@ -421,44 +441,52 @@ CreateFilePreOperation(
 	LIST_ENTRY* List = NULL;
 	RULE_ECHO_DATA* pRuleData = NULL;
 	PFLT_FILE_NAME_INFORMATION pFileNameInfo = NULL;
-	NTSTATUS ntStatus = FLT_PREOP_SUCCESS_NO_CALLBACK;
+	FLT_PREOP_CALLBACK_STATUS Status = FLT_PREOP_SUCCESS_NO_CALLBACK;
 	UNICODE_STRING uDosName = { 0x00 };
 	WCHAR pDosPath[MAX_PATH] = { 0x00 };
     UNICODE_STRING uRulePath = {0x00};
-	BOOL bFound = FALSE;
 
-	do
+	__try
 	{
 		if (PsGetCurrentProcessId() == 4 || PsGetCurrentProcessId() == 0)
-			break;
+		{
+			__leave;
+		}
 		if (!FltObjects->FileObject)
-			break;
-		if(!Data->Iopb->TargetFileObject->FileName.Length || !Data->Iopb->TargetFileObject->FileName.Buffer)
-			break;
+		{
+			__leave;
+		}
+		if (!Data->Iopb->TargetFileObject->FileName.Length || !Data->Iopb->TargetFileObject->FileName.Buffer)
+		{
+			__leave;
+		}
 
-		ntStatus = FltGetFileNameInformation(Data, FLT_FILE_NAME_NORMALIZED, &pFileNameInfo);
-		if (!NT_SUCCESS(ntStatus))
-			break;
-		FltParseFileNameInformation(pFileNameInfo);
+		Status = FltGetFileNameInformation(Data, FLT_FILE_NAME_NORMALIZED, &pFileNameInfo);
+		if (!NT_SUCCESS(Status))
+		{
+			__leave;
+		}
+
+		Status = FltParseFileNameInformation(pFileNameInfo);
+		if (!NT_SUCCESS(Status))
+		{
+			__leave;
+		}
 
 		RtlVolumeDeviceToDosName(FltObjects->FileObject->DeviceObject, &uDosName);
 		RtlCopyMemory(pDosPath, uDosName.Buffer, uDosName.Length);
-        RtlCopyMemory((UCHAR *)pDosPath + uDosName.Length, (UCHAR *)pFileNameInfo->Name.Buffer + pFileNameInfo->Volume.Length, pFileNameInfo->Name.Length - pFileNameInfo->Volume.Length);
+		RtlCopyMemory((UCHAR*)pDosPath + uDosName.Length, (UCHAR*)pFileNameInfo->Name.Buffer + pFileNameInfo->Volume.Length, pFileNameInfo->Name.Length - pFileNameInfo->Volume.Length);
 
 		//KdPrint(("pDosPath is %ws!\n", pDosPath));
 
 		List = g_Global_Control_Data.m_RuleList.Flink;
 		while (List != &g_Global_Control_Data.m_RuleList)
 		{
-			do 
+			pRuleData = CONTAINING_RECORD(List, RULE_ECHO_DATA, m_List);
+			if (pRuleData != NULL 
+				&&
+				wcslen(pDosPath) == pRuleData->m_SourcePath.Length / sizeof(WCHAR))
 			{
-				pRuleData = CONTAINING_RECORD(List, RULE_ECHO_DATA, m_List);
-				if (!pRuleData)
-					break;
-
-				if (wcslen(pDosPath) != pRuleData->m_SourcePath.Length / sizeof(WCHAR))
-                    break;
-
 				//当前写入目标文件和匹配规则
 				if (wcsncmp(pDosPath, pRuleData->m_SourcePath.Buffer, pRuleData->m_SourcePath.Length / sizeof(WCHAR)) == 0)
 				{
@@ -466,49 +494,50 @@ CreateFilePreOperation(
 					uRulePath.Length = pFileNameInfo->Volume.Length + pRuleData->m_EchoPath.Length - 2 * sizeof(WCHAR); // c:
 					uRulePath.MaximumLength = MAX_PATH * sizeof(WCHAR);
 					uRulePath.Buffer = (WCHAR*)ExAllocatePoolWithTag(NonPagedPool, uRulePath.Length + sizeof(WCHAR), '3syS');
-					if (!uRulePath.Buffer)
-						break;
-                    
-					RtlZeroMemory(uRulePath.Buffer, uRulePath.Length);
-					
-                    RtlCopyMemory(uRulePath.Buffer, pFileNameInfo->Volume.Buffer,pFileNameInfo->Volume.Length);
-                    
-					RtlCopyMemory((UCHAR *)uRulePath.Buffer + pFileNameInfo->Volume.Length, pRuleData->m_EchoPath.Buffer + 2, pRuleData->m_EchoPath.Length - 2 * sizeof(WCHAR));
-					
-					if (Data->Iopb->TargetFileObject->FileName.Buffer && Data->Iopb->TargetFileObject->FileName.Length)
+					if (uRulePath.Buffer)
 					{
-						ExFreePool(Data->Iopb->TargetFileObject->FileName.Buffer);
+						RtlZeroMemory(uRulePath.Buffer, uRulePath.Length);
+
+						RtlCopyMemory(uRulePath.Buffer, pFileNameInfo->Volume.Buffer, pFileNameInfo->Volume.Length);
+
+						RtlCopyMemory((UCHAR*)uRulePath.Buffer + pFileNameInfo->Volume.Length, pRuleData->m_EchoPath.Buffer + 2, pRuleData->m_EchoPath.Length - 2 * sizeof(WCHAR));
+
+						if (Data->Iopb->TargetFileObject->FileName.Buffer && Data->Iopb->TargetFileObject->FileName.Length)
+						{
+							ExFreePool(Data->Iopb->TargetFileObject->FileName.Buffer);
+						}
+
+						Data->Iopb->TargetFileObject->FileName.Buffer = uRulePath.Buffer;
+						Data->Iopb->TargetFileObject->FileName.Length = uRulePath.Length;
+						Data->Iopb->TargetFileObject->FileName.MaximumLength = uRulePath.MaximumLength;
+						//FltSetCallbackDataDirty(Data);
+
+						KdPrint(("文件重定向%wZ--->%wZ\n", &pRuleData->m_SourcePath, &pRuleData->m_EchoPath));
+						Data->IoStatus.Information = IO_REPARSE;
+						Data->IoStatus.Status = STATUS_REPARSE;
+						Status = FLT_PREOP_COMPLETE;
+						break;
 					}
-					
-					Data->Iopb->TargetFileObject->FileName.Buffer = uRulePath.Buffer;
-					Data->Iopb->TargetFileObject->FileName.Length = uRulePath.Length;
-					Data->Iopb->TargetFileObject->FileName.MaximumLength = uRulePath.MaximumLength;
-					//FltSetCallbackDataDirty(Data);
-					
-					KdPrint(("文件重定向%wZ--->%wZ\n", &pRuleData->m_SourcePath, &pRuleData->m_EchoPath));
-					Data->IoStatus.Information = IO_REPARSE;
-					Data->IoStatus.Status = STATUS_REPARSE;
-					ntStatus = FLT_PREOP_COMPLETE;
-
-					bFound = TRUE;
-					break;
 				}
-			} while (0);
-
-			if(bFound)
-				break;
+			}
+			
 			List = List->Flink;
 		}
-
-	} while (0);
+	}
+	__finally
+	{
+		if (Status == STATUS_OBJECT_PATH_NOT_FOUND)
+		{
+			Status = FLT_PREOP_SUCCESS_NO_CALLBACK;
+		}
+		
+		if (pFileNameInfo)
+		{
+			FltReleaseFileNameInformation(pFileNameInfo);
+		}	
+	}
 	
-	if (ntStatus == STATUS_OBJECT_PATH_NOT_FOUND)
-		ntStatus = FLT_PREOP_SUCCESS_NO_CALLBACK;
-
-	if (pFileNameInfo)
-		FltReleaseFileNameInformation(pFileNameInfo);
-	return ntStatus;
-	
+	return Status;
 }
 
 FLT_POSTOP_CALLBACK_STATUS
@@ -546,7 +575,7 @@ NTSTATUS DispatchWrite(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 	return ntStatus;
 }
 
-NTSTATUS DispathIoControl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
+NTSTATUS DispatchIoControl(PDEVICE_OBJECT pDeviceObject, PIRP pIrp)
 {
 	NTSTATUS ntStatus = STATUS_SUCCESS;
 	PIO_STACK_LOCATION pIrpStack = IoGetCurrentIrpStackLocation(pIrp);
