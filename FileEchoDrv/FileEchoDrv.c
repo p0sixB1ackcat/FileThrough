@@ -498,7 +498,7 @@ CreateFilePreOperation(
 				if (uReplacePath.Buffer)
 				{
 					RtlZeroMemory(uReplacePath.Buffer, uReplacePath.Length);
-					RtlCopyUnicodeString(&uReplacePath, &pFileNameInfo->Name);
+					RtlCopyUnicodeString(&uReplacePath, &pRuleData->m_EchoPath);
 
 					if (Data->Iopb->TargetFileObject->FileName.Buffer && Data->Iopb->TargetFileObject->FileName.Length)
 					{
@@ -690,7 +690,6 @@ SymbolicNameToDeviceName(
 	WCHAR pSymbolic[6] = L"\\??\\c:";
 	BOOLEAN bRet = FALSE;
 
-	
 	__try
 	{
 		if (puSymbolicName == NULL || puDeviceName == NULL)
@@ -733,7 +732,7 @@ SymbolicNameToDeviceName(
 			}
 			
 			RtlCopyUnicodeString(puDeviceName, &uDeviceName);
-			RtlAppendUnicodeToString(puDeviceName, &uNotHasPartition);
+			RtlAppendUnicodeToString(puDeviceName, uNotHasPartition.Buffer);
 			bRet = TRUE;
 		}
 	}
