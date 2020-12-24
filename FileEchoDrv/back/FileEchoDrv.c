@@ -449,7 +449,9 @@ CreateFilePreOperation(
 	RULE_ECHO_DATA* pRuleData = NULL;
 	PFLT_FILE_NAME_INFORMATION pFileNameInfo = NULL;
 	NTSTATUS Status = STATUS_UNSUCCESSFUL;
-    UNICODE_STRING uReplacePath = {0x00};
+	UNICODE_STRING uDosName = { 0x00 };
+	WCHAR pDosPath[MAX_PATH] = { 0x00 };
+    UNICODE_STRING uRulePath = {0x00};
 	BOOL bIsEcho = FALSE;
 	FLT_PREOP_CALLBACK_STATUS fltStatus = FLT_PREOP_SUCCESS_NO_CALLBACK;
 
@@ -480,6 +482,12 @@ CreateFilePreOperation(
 			__leave;
 		}
 
+		RtlVolumeDeviceToDosName(FltObjects->FileObject->DeviceObject, &uDosName);
+		RtlCopyMemory(pDosPath, uDosName.Buffer, uDosName.Length);
+		RtlCopyMemory((UCHAR*)pDosPath + uDosName.Length, (UCHAR*)pFileNameInfo->Name.Buffer + pFileNameInfo->Volume.Length, pFileNameInfo->Name.Length - pFileNameInfo->Volume.Length);
+
+		//KdPrint(("pDosPath is %ws!\n", pDosPath));
+
 		LockList(&g_Global_Control_Data.m_RuleListLock);
 		List = g_Global_Control_Data.m_RuleList.Flink;
 		while (List != &g_Global_Control_Data.m_RuleList)
@@ -487,34 +495,39 @@ CreateFilePreOperation(
 			pRuleData = CONTAINING_RECORD(List, RULE_ECHO_DATA, m_List);
 			if (pRuleData != NULL 
 				&&
-				RtlCompareUnicodeString(&pFileNameInfo->Name, &pRuleData->m_SourcePath, TRUE) == 0
-				)
+				wcslen(pDosPath) == pRuleData->m_SourcePath.Length / sizeof(WCHAR))
 			{
 				//当前写入目标文件和匹配规则
-				//这里，UNICODE_STRING的Length一定要精准，不能多，就像周哥之前就说过，UNICODE_STRING的处理不是按照他的Buffer为\0来计算结尾，而是按照长度来定位结尾
-				uReplacePath.Length = 0;
-				uReplacePath.MaximumLength = MAX_PATH * sizeof(WCHAR);
-				uReplacePath.Buffer = (WCHAR*)ExAllocatePoolWithTag(NonPagedPool, MAX_PATH * sizeof(WCHAR), '3syS');
-				if (uReplacePath.Buffer)
+				if (wcsncmp(pDosPath, pRuleData->m_SourcePath.Buffer, pRuleData->m_SourcePath.Length / sizeof(WCHAR)) == 0)
 				{
-					RtlZeroMemory(uReplacePath.Buffer, uReplacePath.Length);
-					RtlCopyUnicodeString(&uReplacePath, &pFileNameInfo->Name);
-
-					if (Data->Iopb->TargetFileObject->FileName.Buffer && Data->Iopb->TargetFileObject->FileName.Length)
+					//这里，UNICODE_STRING的Length一定要精准，不能多，就像周哥之前就说过，UNICODE_STRING的处理不是按照他的Buffer为\0来计算结尾，而是按照长度来定位结尾
+					uRulePath.Length = pFileNameInfo->Volume.Length + pRuleData->m_EchoPath.Length - 2 * sizeof(WCHAR); // c:
+					uRulePath.MaximumLength = MAX_PATH * sizeof(WCHAR);
+					uRulePath.Buffer = (WCHAR*)ExAllocatePoolWithTag(NonPagedPool, uRulePath.Length + sizeof(WCHAR), '3syS');
+					if (uRulePath.Buffer)
 					{
-						ExFreePool(Data->Iopb->TargetFileObject->FileName.Buffer);
+						RtlZeroMemory(uRulePath.Buffer, uRulePath.Length);
+
+						RtlCopyMemory(uRulePath.Buffer, pFileNameInfo->Volume.Buffer, pFileNameInfo->Volume.Length);
+
+						RtlCopyMemory((UCHAR*)uRulePath.Buffer + pFileNameInfo->Volume.Length, pRuleData->m_EchoPath.Buffer + 2, pRuleData->m_EchoPath.Length - 2 * sizeof(WCHAR));
+
+						if (Data->Iopb->TargetFileObject->FileName.Buffer && Data->Iopb->TargetFileObject->FileName.Length)
+						{
+							ExFreePool(Data->Iopb->TargetFileObject->FileName.Buffer);
+						}
+
+						Data->Iopb->TargetFileObject->FileName.Buffer = uRulePath.Buffer;
+						Data->Iopb->TargetFileObject->FileName.Length = uRulePath.Length;
+						Data->Iopb->TargetFileObject->FileName.MaximumLength = uRulePath.MaximumLength;
+						//FltSetCallbackDataDirty(Data);
+
+						KdPrint(("文件重定向%wZ--->%wZ\n", &pRuleData->m_SourcePath, &pRuleData->m_EchoPath));
+						Data->IoStatus.Information = IO_REPARSE;
+						Data->IoStatus.Status = STATUS_REPARSE;
+						bIsEcho = TRUE;
+						break;
 					}
-
-					Data->Iopb->TargetFileObject->FileName.Buffer = uReplacePath.Buffer;
-					Data->Iopb->TargetFileObject->FileName.Length = uReplacePath.Length;
-					Data->Iopb->TargetFileObject->FileName.MaximumLength = uReplacePath.MaximumLength;
-					//FltSetCallbackDataDirty(Data);
-
-					KdPrint(("文件重定向%wZ--->%wZ\n", &pRuleData->m_SourcePath, &pRuleData->m_EchoPath));
-					Data->IoStatus.Information = IO_REPARSE;
-					Data->IoStatus.Status = STATUS_REPARSE;
-					bIsEcho = TRUE;
-					break;
 				}
 			}
 			
@@ -673,85 +686,6 @@ FltPortDisconnect(
 	KdPrint(("R3 App is Disconnect!\n"));
 }
 
-BOOLEAN
-SymbolicNameToDeviceName(
-	__in PUNICODE_STRING puSymbolicName, 
-	__out PUNICODE_STRING puDeviceName 
-	)
-{
-	DECLARE_UNICODE_STRING_SIZE(uNotHasPartition, MAX_PATH);
-	HANDLE hSymbolic = NULL;
-	NTSTATUS Status = STATUS_UNSUCCESSFUL;
-	UNICODE_STRING uDeviceName = { 0x00 };
-	WCHAR* pBuffer = NULL;
-	ULONG ulNeedSize = 0;
-	OBJECT_ATTRIBUTES stObjAttr = { 0x00 };
-	UNICODE_STRING uSymbolicName = { 0x00 };
-	WCHAR pSymbolic[6] = L"\\??\\c:";
-	BOOLEAN bRet = FALSE;
-
-	
-	__try
-	{
-		if (puSymbolicName == NULL || puDeviceName == NULL)
-		{
-			Status = STATUS_INVALID_PARAMETER;
-			__leave;
-		}
-
-		RtlAppendUnicodeToString((PUNICODE_STRING)&uNotHasPartition, puSymbolicName->Buffer + 2);
-
-		pSymbolic[4] = *puSymbolicName->Buffer;
-		RtlInitUnicodeString(&uSymbolicName, pSymbolic);
-
-		InitializeObjectAttributes(&stObjAttr, &uSymbolicName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
-		Status = ZwOpenSymbolicLinkObject(&hSymbolic, SYMBOLIC_LINK_QUERY, &stObjAttr);
-		if (!NT_SUCCESS(Status))
-		{
-			__leave;
-		}
-
-		Status = ZwQuerySymbolicLinkObject(hSymbolic, &uDeviceName, &ulNeedSize);
-		if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_TOO_SMALL)
-		{
-			pBuffer = (WCHAR*)ExAllocatePoolWithTag(PagedPool, ulNeedSize, 'bveD');
-			if (pBuffer == NULL)
-			{
-				Status = STATUS_INSUFFICIENT_RESOURCES;
-				__leave;
-			}
-
-			RtlZeroMemory(pBuffer, ulNeedSize);
-			uDeviceName.Length = 0;
-			uDeviceName.MaximumLength = ulNeedSize;
-			uDeviceName.Buffer = pBuffer;
-
-			Status = ZwQuerySymbolicLinkObject(hSymbolic, &uDeviceName, &ulNeedSize);
-			if (!NT_SUCCESS(Status))
-			{
-				__leave;
-			}
-			
-			RtlCopyUnicodeString(puDeviceName, &uDeviceName);
-			RtlAppendUnicodeToString(puDeviceName, &uNotHasPartition);
-			bRet = TRUE;
-		}
-	}
-	__finally
-	{
-		if (hSymbolic)
-		{
-			ZwClose(hSymbolic);
-		}
-		if (pBuffer)
-		{
-			ExFreePool(pBuffer);
-			pBuffer = NULL;
-		}
-	}
-
-	return bRet;
-}
 
 void ResolveRule(WCHAR* BufferPointer, ULONG BufferSize)
 {
@@ -774,29 +708,25 @@ void ResolveRule(WCHAR* BufferPointer, ULONG BufferSize)
 			if (!pRuleEcho)
 				break;
 			memset(pRuleEcho, 0x00, sizeof(RULE_ECHO_DATA));
-
-			ULONG ulCopyLen = ((ULONG)p - (ULONG)q) + sizeof(WCHAR);
-			pRuleEcho->m_SourcePath.Length = 0;
-			pRuleEcho->m_SourcePath.MaximumLength = MAX_PATH * sizeof(WCHAR);
-			pRuleEcho->m_SourcePath.Buffer = ExAllocatePoolWithTag(PagedPool, MAX_PATH * sizeof(WCHAR), '1syS');
+			pRuleEcho->m_SourcePath.Length = (ULONG)p - (ULONG)q;
+			pRuleEcho->m_SourcePath.Buffer = ExAllocatePoolWithTag(PagedPool, pRuleEcho->m_SourcePath.Length, '1syS');
 			if (!pRuleEcho->m_SourcePath.Buffer)
 			{
 				ExFreePoolWithTag(pRuleEcho, 0);
 				break;
 			}
-			memset(pRuleEcho->m_SourcePath.Buffer, 0x00, MAX_PATH * sizeof(WCHAR));
-			RtlCopyMemory(pRuleEcho->m_SourcePath.Buffer, q, ulCopyLen - sizeof(WCHAR));
+			memset(pRuleEcho->m_SourcePath.Buffer,0x00,pRuleEcho->m_SourcePath.Length);
+			pRuleEcho->m_SourcePath.MaximumLength = MAX_PATH * sizeof(WCHAR);
+			RtlCopyMemory(pRuleEcho->m_SourcePath.Buffer,q,pRuleEcho->m_SourcePath.Length);
 			
 			pTail = p;
 			while (*pTail != L'\0' && *pTail != L'\n')
 				++pTail;
 			if (*pTail == L'\n')
 			{
-				ulCopyLen = (ULONG)(pTail - 1) - (ULONG)(p + wcslen(SpaceFlagStr)) + sizeof(WCHAR);
-
-				pRuleEcho->m_EchoPath.Length = 0;
+				pRuleEcho->m_EchoPath.Length = (ULONG)(pTail - 1) - (ULONG)(p + wcslen(SpaceFlagStr));
+				pRuleEcho->m_EchoPath.Buffer = ExAllocatePoolWithTag(PagedPool, pRuleEcho->m_EchoPath.Length, '2syS');
 				pRuleEcho->m_EchoPath.MaximumLength = MAX_PATH * sizeof(WCHAR);
-				pRuleEcho->m_EchoPath.Buffer = ExAllocatePoolWithTag(PagedPool, MAX_PATH * sizeof(WCHAR), '2syS');
 				if (!pRuleEcho->m_EchoPath.Buffer)
 				{
 					ExFreePoolWithTag(pRuleEcho->m_SourcePath.Buffer, 0);
@@ -804,8 +734,8 @@ void ResolveRule(WCHAR* BufferPointer, ULONG BufferSize)
 					break;
 				}
 
-				memset(pRuleEcho->m_EchoPath.Buffer, 0x00, MAX_PATH * sizeof(WCHAR));
-				RtlCopyMemory(pRuleEcho->m_EchoPath.Buffer, p + wcslen(SpaceFlagStr), ulCopyLen - sizeof(WCHAR));
+				memset(pRuleEcho->m_EchoPath.Buffer, 0x00, pRuleEcho->m_EchoPath.Length);
+				RtlCopyMemory(pRuleEcho->m_EchoPath.Buffer, p + wcslen(SpaceFlagStr), pRuleEcho->m_EchoPath.Length);
 
 				q = pTail + 1;
 			}
@@ -817,21 +747,6 @@ void ResolveRule(WCHAR* BufferPointer, ULONG BufferSize)
 		i += sizeof(WCHAR);
 		++p;
 	}
-
-	LockList(&g_Global_Control_Data.m_RuleListLock);
-
-	for (LIST_ENTRY* Entry = g_Global_Control_Data.m_RuleList.Flink; Entry != &g_Global_Control_Data.m_RuleList; Entry = Entry->Flink)
-	{
-		PRULE_ECHO_DATA pRuleData = (PRULE_ECHO_DATA)CONTAINING_RECORD(Entry, RULE_ECHO_DATA, m_List);
-		if (pRuleData)
-		{
-			SymbolicNameToDeviceName(&pRuleData->m_SourcePath, &pRuleData->m_SourcePath);
-			SymbolicNameToDeviceName(&pRuleData->m_EchoPath, &pRuleData->m_EchoPath);
-		}
-	}
-
-	UnlockList(&g_Global_Control_Data.m_RuleListLock);
-
 }
 
 NTSTATUS FltNotifyMessage(PVOID PortCookie
