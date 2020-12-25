@@ -1,2 +1,7 @@
+build:
+VS2019-WDK10
+
+test:
 Windows7 x64
-WDK10
+Windows10 x64 1903
+
